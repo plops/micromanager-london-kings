@@ -1,0 +1,78 @@
+#summary A small Clojure program to read mouse input from `/dev/input/event3` and draw on screen with OpenGL.
+#labels Featured
+
+= Introduction =
+
+Having watched some screen captures of _speed painting_ on Youtube I am jealous and want to be able to do the same thing.
+
+I organized myself a pressure sensitive graphic tablet but I don't feel like installing Gimp on my EEEPC. Lets see how far I can get with Clojure as a replacement.
+
+= Details =
+
+The graphic tablet generates time stamped 16 byte packets on `/dev/input/event6` that either contain absolute x or y coordinate or the pressure. However to keep things compatible I will start with a normal mouse as input.
+
+Run `hexdump -C /dev/input/event3` and move the mouse. You should see the packages it emits when its moved. If you see no output try a device with a different number. On my Ubuntu computer I had to add `Option "AutoAddDevices" "false"` to the section `ServerFlags`.
+
+The structure of the data is described in `/usr/include/linux/input.h` with:
+{{{
+struct input_event {
+        struct timeval time;
+        __u16 type;
+        __u16 code;
+        __s32 value;
+};
+}}}
+
+Lets see what the data looks like. I open a new Clojure file in Emacs with Slime and Paredit. The following lines open the file and read one packet. Run each line with `C-M-x`.
+{{{
+(import '(java.io FileInputStream))
+(def f (FileInputStream. "/dev/input/event3"))
+(def buf (make-array Byte/TYPE 16))
+(.read f buf)
+}}}
+
+To see the data put the cursor on `buf` and press `C-c I`. 
+This opens an Inspector window with the following contents:
+{{{
+Type: class [B
+Value: [B@1a73d30
+}}}
+
+But that isn't very readable.
+I use the following code to parse the data into its components.
+{{{
+(defn char-to-uchar [c]
+  (if (< c 0)
+    (+ 256 c)
+    c))
+
+(defn read-uint [#^bytes buf #^Integer offset]
+  (let [a (char-to-uchar (aget buf (int (+ (int 0) offset))))
+        b (char-to-uchar (aget buf (int (+ (int 1) offset))))
+        c (char-to-uchar (aget buf (int (+ (int 2) offset))))
+        d (char-to-uchar (aget buf (int (+ (int 3) offset))))
+        value (+ a
+                 (* 256 (+ b
+                           (* 256 (+ c
+                                     (* 256 d))))))]
+    value))
+
+(defn read-ushort [#^bytes buf #^Integer offset]
+  (let [a (char-to-uchar (aget buf (int (+ 0 offset))))
+        b (char-to-uchar (aget buf (int (+ 1 offset))))
+        value (+ (int a)
+                 (* 256 (int b)))]
+    value))
+
+(defn read-input-event [#^bytes buf]
+  (let [tv-sec (read-uint buf 0)
+        tv-usec (read-uint buf 4)
+        type (read-ushort buf 8)
+        code (read-ushort buf 10)
+        value (read-uint buf 12)]
+    {:sec tv-sec :usec tv-usec :type type :code code :value value}))
+
+(read-input-event buf)
+}}}
+
+Executing the last line gives `{:sec 1246284491, :usec 69571, :type 2, :code 0, :value 1}`.
